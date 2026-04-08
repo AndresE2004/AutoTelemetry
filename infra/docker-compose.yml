@@ -1,0 +1,60 @@
+# Telema Mobility — datos (TimescaleDB) + bus (Kafka) en local.
+# Uso: desde la raíz del repo →  docker compose -f infra/docker-compose.yml up -d
+#
+# Postgres en el host: por defecto 5433→5432 (evita choque con postgres.exe en Windows :5432).
+# Anular: POSTGRES_PORT en infra/.env (ver infra/.env.example).
+#
+# Brokers desde el PC (simulador / consumidor en el host): 127.0.0.1:9092
+# Desde otro contenedor en la misma red Compose: kafka:29092
+
+services:
+  postgres:
+    image: timescale/timescaledb:2.16.1-pg15
+    container_name: telema-postgres
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER:-telema}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-telema_dev}
+      POSTGRES_DB: ${POSTGRES_DB:-telema}
+    ports:
+      - "${POSTGRES_PORT:-5433}:5432"
+    volumes:
+      - telema_pg_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-telema} -d ${POSTGRES_DB:-telema}"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
+  zookeeper:
+    image: confluentinc/cp-zookeeper:7.6.1
+    container_name: telema-zookeeper
+    restart: unless-stopped
+    environment:
+      ZOOKEEPER_CLIENT_PORT: 2181
+      ZOOKEEPER_TICK_TIME: 2000
+    ports:
+      - "${ZOOKEEPER_PORT:-2181}:2181"
+
+  kafka:
+    image: confluentinc/cp-kafka:7.6.1
+    container_name: telema-kafka
+    restart: unless-stopped
+    depends_on:
+      - zookeeper
+    ports:
+      - "${KAFKA_HOST_PORT:-9092}:9092"
+    environment:
+      KAFKA_BROKER_ID: 1
+      KAFKA_ZOOKEEPER_CONNECT: zookeeper:2181
+      KAFKA_LISTENER_SECURITY_PROTOCOL_MAP: PLAINTEXT:PLAINTEXT,PLAINTEXT_HOST:PLAINTEXT
+      KAFKA_ADVERTISED_LISTENERS: PLAINTEXT://kafka:29092,PLAINTEXT_HOST://localhost:${KAFKA_HOST_PORT:-9092}
+      KAFKA_LISTENERS: PLAINTEXT://0.0.0.0:29092,PLAINTEXT_HOST://0.0.0.0:9092
+      KAFKA_INTER_BROKER_LISTENER_NAME: PLAINTEXT
+      KAFKA_OFFSETS_TOPIC_REPLICATION_FACTOR: 1
+      KAFKA_TRANSACTION_STATE_LOG_MIN_ISR: 1
+      KAFKA_TRANSACTION_STATE_LOG_REPLICATION_FACTOR: 1
+      KAFKA_AUTO_CREATE_TOPICS_ENABLE: "true"
+
+volumes:
+  telema_pg_data:
