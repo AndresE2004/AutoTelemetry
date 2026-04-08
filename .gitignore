@@ -14,9 +14,11 @@ npm-debug.log*
 yarn-debug.log*
 yarn-error.log*
 
-# env
+# env — no subir secretos (*.example sí va al repo)
 .env
 .env*.local
+backend/.env
+infra/.env
 
 # IDE
 .idea
