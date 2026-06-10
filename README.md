@@ -185,11 +185,3 @@ docker compose -f infra/docker-compose.yml down
 
 No uses `down -v` salvo que quieras borrar los volúmenes (perderías la BD y tendrías que re-correr migraciones/seed).
 
-## Publicar en GitHub (checklist rápido)
-
-- Este README describe el arranque completo; no hace falta otro documento en el repo para clonar y ejecutar.
-- Los secretos van en `.env` / `.env.local` (ya están en `.gitignore`); en GitHub solo deben existir los `*.example`.
-- Bitácoras internas y propuestas académicas en `docs/` **no se versionan**: están listadas en `.gitignore` para que no suban por accidente. Si las tienes en tu máquina, quedan solo locales.
-- Tras clonar: copia `backend/.env.example` → `backend/.env`, `.env.example` → `.env.local` (raíz), `infra/.env` si aplica; luego Docker + migraciones + seed como arriba.
-- En Windows, si `alembic` no se reconoce, usa el intérprete del venv: `python -m alembic upgrade head` (desde `backend/` con el venv activado).
-
