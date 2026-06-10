@@ -1,6 +1,7 @@
 "use client"
 
 import Link from "next/link"
+import { useQuery } from "@tanstack/react-query"
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card"
 import { Badge } from "@/components/ui/badge"
 import { Button } from "@/components/ui/button"
@@ -12,71 +13,83 @@ import {
   TableHeader,
   TableRow,
 } from "@/components/ui/table"
-import { Bell, ExternalLink } from "lucide-react"
-
-const ROWS = [
-  {
-    id: "1",
-    vehicle: "TM-4821",
-    type: "Temperatura motor elevada",
-    severity: "Alta" as const,
-    model: "Isolation Forest · v2.3",
-    status: "Abierto" as const,
-  },
-  {
-    id: "2",
-    vehicle: "TM-3301",
-    type: "Voltaje de batería bajo",
-    severity: "Alta" as const,
-    model: "Autoencoder · v1.8",
-    status: "Ticket" as const,
-  },
-  {
-    id: "3",
-    vehicle: "TM-1105",
-    type: "Patrón RPM inusual",
-    severity: "Media" as const,
-    model: "Isolation Forest · v2.3",
-    status: "En revisión" as const,
-  },
-  {
-    id: "4",
-    vehicle: "TM-5512",
-    type: "Presión de neumático",
-    severity: "Baja" as const,
-    model: "Reglas · v1.0",
-    status: "Abierto" as const,
-  },
-  {
-    id: "5",
-    vehicle: "TM-2204",
-    type: "Consumo energético alto",
-    severity: "Media" as const,
-    model: "Ensamble · v3.1",
-    status: "Cerrado" as const,
-  },
-]
+import { Bell, ExternalLink, Loader2 } from "lucide-react"
+import { fetchAnomalies, getApiBaseUrl, type ApiAnomaly } from "@/lib/api"
 
 const SEV: Record<string, string> = {
-  Alta: "border-[var(--tm-danger)]/30 bg-[var(--tm-danger)]/15 text-[var(--tm-danger)]",
-  Media: "border-[var(--tm-warning)]/30 bg-[var(--tm-warning)]/15 text-[var(--tm-warning)]",
-  Baja: "border-[var(--tm-success)]/30 bg-[var(--tm-success)]/15 text-[var(--tm-success)]",
+  critical: "border-[var(--tm-danger)]/30 bg-[var(--tm-danger)]/15 text-[var(--tm-danger)]",
+  high: "border-[var(--tm-danger)]/30 bg-[var(--tm-danger)]/15 text-[var(--tm-danger)]",
+  medium: "border-[var(--tm-warning)]/30 bg-[var(--tm-warning)]/15 text-[var(--tm-warning)]",
+  low: "border-[var(--tm-success)]/30 bg-[var(--tm-success)]/15 text-[var(--tm-success)]",
+}
+
+const SEV_LABEL: Record<string, string> = {
+  critical: "Crítica",
+  high: "Alta",
+  medium: "Media",
+  low: "Baja",
 }
 
 const STAT: Record<string, string> = {
   Abierto: "border-[var(--tm-danger)]/30 bg-[var(--tm-danger)]/15 text-[var(--tm-danger)]",
-  Ticket: "border-[var(--tm-info)]/30 bg-[var(--tm-info)]/15 text-[var(--tm-info)]",
-  "En revisión": "border-[var(--tm-warning)]/30 bg-[var(--tm-warning)]/15 text-[var(--tm-warning)]",
-  Cerrado: "border-[var(--tm-success)]/30 bg-[var(--tm-success)]/15 text-[var(--tm-success)]",
+  "Ticket creado": "border-[var(--tm-info)]/30 bg-[var(--tm-info)]/15 text-[var(--tm-info)]",
+  Resuelto: "border-[var(--tm-success)]/30 bg-[var(--tm-success)]/15 text-[var(--tm-success)]",
 }
 
+function rowFromAnomaly(a: ApiAnomaly) {
+  const sev = a.severity in SEV_LABEL ? a.severity : "medium"
+  const status = a.resolved_at ? "Resuelto" : a.ticket_id ? "Ticket creado" : "Abierto"
+  const type =
+    a.sensor_affected === "engine_temp"
+      ? "Temperatura motor elevada"
+      : a.sensor_affected === "battery_voltage"
+        ? "Voltaje de batería bajo"
+        : a.sensor_affected === "rpm"
+          ? "Patrón RPM inusual"
+          : a.sensor_affected === "vibration_rms"
+            ? "Vibración RMS atípica"
+            : "Patrón multivariable"
+  return {
+    id: a.id,
+    vehicle: a.plate,
+    type,
+    severity: SEV_LABEL[sev] ?? "Media",
+    model: a.model_version ?? "Isolation Forest",
+    status,
+  }
+}
+
+const DEMO_ROWS = [
+  {
+    id: "demo-1",
+    vehicle: "MED-1001",
+    type: "Sin API — ejemplo",
+    severity: "Media",
+    model: "—",
+    status: "Abierto",
+  },
+]
+
 export function RecentAlerts() {
+  const baseUrl = getApiBaseUrl()
+  const q = useQuery({
+    queryKey: ["dashboard", "recent-anomalies"],
+    queryFn: () => fetchAnomalies(baseUrl!, 8),
+    enabled: !!baseUrl,
+    refetchInterval: 20_000,
+  })
+
+  const rows = baseUrl && !q.isError && q.data?.length
+    ? q.data.slice(0, 5).map(rowFromAnomaly)
+    : DEMO_ROWS
+
   return (
     <Card className="border-border bg-card">
       <CardHeader className="pb-2">
         <CardTitle className="flex items-center gap-2 text-base font-semibold">
           <Bell className="h-4 w-4 text-[var(--tm-warning)]" />
           Últimas alertas del motor de anomalías
+          {q.isFetching ? <Loader2 className="h-3.5 w-3.5 animate-spin text-muted-foreground" /> : null}
         </CardTitle>
       </CardHeader>
       <CardContent>
@@ -92,18 +105,31 @@ export function RecentAlerts() {
             </TableRow>
           </TableHeader>
           <TableBody>
-            {ROWS.map((r) => (
+            {rows.map((r) => (
               <TableRow key={r.id} className="border-border hover:bg-muted/40">
                 <TableCell className="font-mono text-sm font-medium">{r.vehicle}</TableCell>
                 <TableCell className="text-sm">{r.type}</TableCell>
                 <TableCell>
-                  <Badge variant="outline" className={`text-[10px] ${SEV[r.severity]}`}>
+                  <Badge
+                    variant="outline"
+                    className={`text-[10px] ${
+                      SEV[
+                        r.severity === "Crítica"
+                          ? "critical"
+                          : r.severity === "Alta"
+                            ? "high"
+                            : r.severity === "Media"
+                              ? "medium"
+                              : "low"
+                      ] ?? SEV.medium
+                    }`}
+                  >
                     {r.severity}
                   </Badge>
                 </TableCell>
                 <TableCell className="text-xs text-muted-foreground">{r.model}</TableCell>
                 <TableCell>
-                  <Badge variant="outline" className={`text-[10px] ${STAT[r.status]}`}>
+                  <Badge variant="outline" className={`text-[10px] ${STAT[r.status] ?? ""}`}>
                     {r.status}
                   </Badge>
                 </TableCell>

@@ -2,15 +2,18 @@
 
 import { useCallback, useEffect, useRef, useState } from "react"
 import type { TwinScenarioId, TwinTelemetryFrame } from "@/lib/digital-twin-types"
+import { getTwinWsBaseUrl } from "@/lib/api"
 import { nextSyntheticTwinFrame } from "@/lib/synthetic-twin-tick"
 
 const INTERVAL_MS = 500
+const WS_CONNECT_MS = 4000
 
 type Options = {
   vehicleId: string
   scenario: TwinScenarioId
-  /** Si está definida, se intenta WebSocket; si falla o no hay URL, se usa simulación local. */
+  /** Si se pasa, tiene prioridad sobre env / derivación desde API URL. */
   wsBaseUrl?: string | null
+  enabled?: boolean
 }
 
 type TwinStream = {
@@ -27,10 +30,9 @@ function trimEvents(prev: string[], line: string, max = 40) {
 }
 
 /**
- * Consume el estado del gemelo: prioriza `NEXT_PUBLIC_TWIN_WS_URL` + `/ws/twin/{vehicleId}`,
- * con fallback determinístico al generador sintético (misma cadencia ~500 ms que el prompt).
+ * Gemelo digital: intenta WebSocket en `/ws/twin/{vehicleId}`; si falla o no hay URL, simulación local.
  */
-export function useTwinWebSocket({ vehicleId, scenario, wsBaseUrl }: Options): TwinStream {
+export function useTwinWebSocket({ vehicleId, scenario, wsBaseUrl, enabled = true }: Options): TwinStream {
   const [frame, setFrame] = useState<TwinTelemetryFrame | null>(null)
   const [connected, setConnected] = useState(false)
   const [source, setSource] = useState<"websocket" | "synthetic">("synthetic")
@@ -44,11 +46,7 @@ export function useTwinWebSocket({ vehicleId, scenario, wsBaseUrl }: Options): T
     setEvents((e) => trimEvents(e, `[${t}] ${msg}`))
   }, [])
 
-  const envUrl =
-    typeof process !== "undefined"
-      ? process.env.NEXT_PUBLIC_TWIN_WS_URL?.replace(/\/$/, "") ?? null
-      : null
-  const base = wsBaseUrl ?? envUrl
+  const base = wsBaseUrl ?? getTwinWsBaseUrl()
 
   useEffect(() => {
     tickRef.current = 0
@@ -56,35 +54,60 @@ export function useTwinWebSocket({ vehicleId, scenario, wsBaseUrl }: Options): T
   }, [scenario, vehicleId])
 
   useEffect(() => {
-    if (!base) {
+    if (!enabled) {
+      setFrame(null)
+      setConnected(false)
+      setSource("synthetic")
+      return
+    }
+
+    let cancelled = false
+    let syntheticTimer: ReturnType<typeof setInterval> | null = null
+    let connectTimer: ReturnType<typeof setTimeout> | null = null
+
+    const startSynthetic = (reason: string) => {
+      if (cancelled || syntheticTimer) return
+      wsRef.current?.close()
+      wsRef.current = null
       setSource("synthetic")
       setConnected(false)
-      const id = window.setInterval(() => {
+      pushEvent(reason)
+      syntheticTimer = window.setInterval(() => {
         tickRef.current += 1
         const wasActive = prevRef.current?.anomalyActive ?? false
         const next = nextSyntheticTwinFrame(prevRef.current, scenario, vehicleId, tickRef.current)
         prevRef.current = next
         setFrame(next)
-        if (tickRef.current === 1) {
-          pushEvent(`Simulación local · escenario «${scenario}» · ${vehicleId}`)
-        }
         if (next.anomalyActive && !wasActive) {
           pushEvent(`Anomalía · score ${next.anomalyScore.toFixed(2)} · ${next.pipelineNote ?? ""}`)
         }
       }, INTERVAL_MS)
-      return () => window.clearInterval(id)
     }
 
-    const url = `${base}/ws/twin/${encodeURIComponent(vehicleId)}`
-    let cancelled = false
+    if (!base) {
+      startSynthetic(`Simulación local · escenario «${scenario}» · ${vehicleId}`)
+      return () => {
+        cancelled = true
+        if (syntheticTimer) window.clearInterval(syntheticTimer)
+      }
+    }
+
+    const url = `${base}/ws/twin/${encodeURIComponent(vehicleId)}?scenario=${encodeURIComponent(scenario)}`
     const ws = new WebSocket(url)
     wsRef.current = ws
 
+    connectTimer = window.setTimeout(() => {
+      if (cancelled || ws.readyState === WebSocket.OPEN) return
+      ws.close()
+      startSynthetic("WebSocket sin respuesta · simulación local")
+    }, WS_CONNECT_MS)
+
     ws.onopen = () => {
       if (cancelled) return
+      if (connectTimer) window.clearTimeout(connectTimer)
       setConnected(true)
       setSource("websocket")
-      pushEvent(`WebSocket conectado · ${url}`)
+      pushEvent(`WebSocket conectado · ${base}`)
     }
 
     ws.onmessage = (ev) => {
@@ -99,21 +122,26 @@ export function useTwinWebSocket({ vehicleId, scenario, wsBaseUrl }: Options): T
 
     ws.onerror = () => {
       if (cancelled) return
-      pushEvent("Error de WebSocket · revisa TLS/CORS/backend")
+      pushEvent("Error de WebSocket · revisa que la API esté en :8000")
     }
 
     ws.onclose = () => {
       if (cancelled) return
+      if (connectTimer) window.clearTimeout(connectTimer)
       setConnected(false)
-      pushEvent("WebSocket cerrado")
+      if (!syntheticTimer && ws.readyState !== WebSocket.OPEN) {
+        startSynthetic("WebSocket cerrado · simulación local")
+      }
     }
 
     return () => {
       cancelled = true
+      if (connectTimer) window.clearTimeout(connectTimer)
+      if (syntheticTimer) window.clearInterval(syntheticTimer)
       ws.close()
       wsRef.current = null
     }
-  }, [base, scenario, vehicleId, pushEvent])
+  }, [base, scenario, vehicleId, pushEvent, enabled])
 
   return { frame, connected, source, events, pushEvent }
 }

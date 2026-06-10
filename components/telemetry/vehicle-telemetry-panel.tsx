@@ -25,6 +25,7 @@ import {
   SelectValue,
 } from "@/components/ui/select"
 import { fetchVehicleTelemetry, fetchVehicles, getApiBaseUrl, type ApiTelemetryPoint } from "@/lib/api"
+import { Iso10816VibrationPanel } from "@/components/telemetry/iso10816-vibration-panel"
 
 type ChartRow = {
   label: string
@@ -32,6 +33,7 @@ type ChartRow = {
   engine_temp: number | null
   battery_voltage: number | null
   rpm: number | null
+  vibration_rms: number | null
 }
 
 function toChartRows(points: ApiTelemetryPoint[]): ChartRow[] {
@@ -45,6 +47,7 @@ function toChartRows(points: ApiTelemetryPoint[]): ChartRow[] {
     engine_temp: p.engine_temp,
     battery_voltage: p.battery_voltage,
     rpm: p.rpm,
+    vibration_rms: p.vibration_rms ?? null,
   }))
 }
 
@@ -74,6 +77,11 @@ export function VehicleTelemetryPanel() {
 
   const chartData = useMemo(() => toChartRows(points), [points])
   const selectedVehicle = vehicles.find((v) => v.id === selectedId)
+  const hasVibration = useMemo(() => chartData.some((r) => r.vibration_rms != null), [chartData])
+  const vibrationSeries = useMemo(
+    () => chartData.map((r) => r.vibration_rms),
+    [chartData],
+  )
 
   if (!apiBase) {
     return (
@@ -145,69 +153,92 @@ export function VehicleTelemetryPanel() {
       ) : null}
 
       {chartData.length > 0 ? (
-        <Card className="border-border bg-card">
-          <CardHeader className="pb-2">
-            <CardTitle className="flex items-center gap-2 text-base font-semibold">
-              <Activity className="h-5 w-5 text-[var(--tm-success)]" />
-              Series (TimescaleDB vía API)
-            </CardTitle>
-          </CardHeader>
-          <CardContent className="h-[340px] w-full pt-2">
-            <ResponsiveContainer width="100%" height="100%">
-              <LineChart data={chartData} margin={{ top: 8, right: 8, left: 0, bottom: 0 }}>
-                <CartesianGrid strokeDasharray="3 3" className="stroke-muted" />
-                <XAxis dataKey="label" tick={{ fontSize: 10 }} interval="preserveStartEnd" />
-                <YAxis yAxisId="left" tick={{ fontSize: 10 }} width={36} />
-                <YAxis yAxisId="right" orientation="right" tick={{ fontSize: 10 }} width={40} />
-                <Tooltip
-                  contentStyle={{
-                    background: "hsl(var(--card))",
-                    border: "1px solid hsl(var(--border))",
-                    borderRadius: "8px",
-                    fontSize: "12px",
-                  }}
-                />
-                <Legend wrapperStyle={{ fontSize: "12px" }} />
-                <Line
-                  yAxisId="left"
-                  type="monotone"
-                  dataKey="speed"
-                  name="Velocidad"
-                  stroke="var(--chart-1)"
-                  dot={false}
-                  strokeWidth={2}
-                />
-                <Line
-                  yAxisId="left"
-                  type="monotone"
-                  dataKey="engine_temp"
-                  name="Temp. motor °C"
-                  stroke="var(--chart-3)"
-                  dot={false}
-                  strokeWidth={2}
-                />
-                <Line
-                  yAxisId="right"
-                  type="monotone"
-                  dataKey="rpm"
-                  name="RPM"
-                  stroke="var(--chart-2)"
-                  dot={false}
-                  strokeWidth={2}
-                />
-                <Line
-                  yAxisId="right"
-                  type="monotone"
-                  dataKey="battery_voltage"
-                  name="Voltaje"
-                  stroke="var(--chart-4)"
-                  dot={false}
-                  strokeWidth={2}
-                />
-              </LineChart>
-            </ResponsiveContainer>
-          </CardContent>
-        </Card>
+        <div className={hasVibration ? "grid grid-cols-1 gap-6 xl:grid-cols-3" : ""}>
+          <Card className={`border-border bg-card ${hasVibration ? "xl:col-span-2" : ""}`}>
+            <CardHeader className="pb-2">
+              <CardTitle className="flex items-center gap-2 text-base font-semibold">
+                <Activity className="h-5 w-5 text-[var(--tm-success)]" />
+                Series (TimescaleDB vía API)
+              </CardTitle>
+            </CardHeader>
+            <CardContent className="h-[340px] w-full pt-2">
+              <ResponsiveContainer width="100%" height="100%">
+                <LineChart data={chartData} margin={{ top: 8, right: 8, left: 0, bottom: 0 }}>
+                  <CartesianGrid strokeDasharray="3 3" className="stroke-muted" />
+                  <XAxis dataKey="label" tick={{ fontSize: 10 }} interval="preserveStartEnd" />
+                  <YAxis yAxisId="left" tick={{ fontSize: 10 }} width={36} />
+                  <YAxis yAxisId="right" orientation="right" tick={{ fontSize: 10 }} width={40} />
+                  <Tooltip
+                    contentStyle={{
+                      background: "hsl(var(--card))",
+                      border: "1px solid hsl(var(--border))",
+                      borderRadius: "8px",
+                      fontSize: "12px",
+                    }}
+                  />
+                  <Legend wrapperStyle={{ fontSize: "12px" }} />
+                  <Line
+                    yAxisId="left"
+                    type="monotone"
+                    dataKey="speed"
+                    name="Velocidad"
+                    stroke="var(--chart-1)"
+                    dot={false}
+                    strokeWidth={2}
+                  />
+                  <Line
+                    yAxisId="left"
+                    type="monotone"
+                    dataKey="engine_temp"
+                    name="Temp. motor °C"
+                    stroke="var(--chart-3)"
+                    dot={false}
+                    strokeWidth={2}
+                  />
+                  <Line
+                    yAxisId="right"
+                    type="monotone"
+                    dataKey="rpm"
+                    name="RPM"
+                    stroke="var(--chart-2)"
+                    dot={false}
+                    strokeWidth={2}
+                  />
+                  <Line
+                    yAxisId="right"
+                    type="monotone"
+                    dataKey="battery_voltage"
+                    name="Voltaje"
+                    stroke="var(--chart-4)"
+                    dot={false}
+                    strokeWidth={2}
+                  />
+                  {hasVibration ? (
+                    <Line
+                      yAxisId="left"
+                      type="monotone"
+                      dataKey="vibration_rms"
+                      name="Vibración RMS (g)"
+                      stroke="#a855f7"
+                      dot={false}
+                      strokeWidth={2}
+                    />
+                  ) : null}
+                </LineChart>
+              </ResponsiveContainer>
+            </CardContent>
+          </Card>
+          {hasVibration ? (
+            <Iso10816VibrationPanel
+              vibrationValues={vibrationSeries}
+              contextLabel={
+                selectedVehicle
+                  ? `${selectedVehicle.plate} · ${selectedVehicle.brand} ${selectedVehicle.model}`
+                  : undefined
+              }
+            />
+          ) : null}
+        </div>
       ) : null}
     </div>
   )

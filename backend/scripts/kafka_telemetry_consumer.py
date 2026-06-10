@@ -6,6 +6,9 @@ Consumidor Kafka → TimescaleDB (hypertable telemetry_readings).
   python scripts/kafka_telemetry_consumer.py
 
 Requiere: docker compose con Kafka arriba, migraciones y DATABASE_URL_ASYNC en backend/.env.
+
+Campo opcional de vibración: el JSON puede incluir `vibration_rms` (o alias `vib_rms`, `accel_rms`, `rms_accel`);
+se persiste en la columna `telemetry_readings.vibration_rms` además del `raw_payload` completo.
 """
 
 from __future__ import annotations
@@ -14,6 +17,8 @@ import asyncio
 import json
 import logging
 import os
+import sys
+import uuid
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
@@ -23,17 +28,30 @@ from aiokafka import AIOKafkaConsumer
 from dotenv import load_dotenv
 
 _backend = Path(__file__).resolve().parent.parent
+if str(_backend) not in sys.path:
+    sys.path.insert(0, str(_backend))
 load_dotenv(_backend / ".env", encoding="utf-8", override=True)
+
+from scada.transformer import build_pipeline_audit_row  # noqa: E402
 
 logger = logging.getLogger(__name__)
 
 INSERT_SQL = """
 INSERT INTO telemetry_readings (
-    time, device_time, vehicle_id, speed, engine_temp, battery_voltage, rpm,
+    time, device_time, vehicle_id, speed, engine_temp, battery_voltage, rpm, vibration_rms,
     tire_pressure_fl, tire_pressure_fr, tire_pressure_rl, tire_pressure_rr,
     latitude, longitude, altitude, odometer, kafka_offset, raw_payload
 ) VALUES (
-    $1, $2, $3::uuid, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17::jsonb
+    $1, $2, $3::uuid, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18::jsonb
+)
+"""
+
+AUDIT_INSERT_SQL = """
+INSERT INTO pipeline_audit_log (
+    time, vehicle_id, kafka_offset, mqtt_received, kafka_ingested, scada_processed, db_written,
+    total_latency_ms, stage, status, error_detail
+) VALUES (
+    $1, $2::uuid, $3, $4, $5, $6, $7, $8, $9, $10, $11
 )
 """
 
@@ -50,6 +68,19 @@ def _parse_device_time(s: str) -> datetime:
     return datetime.fromisoformat(s)
 
 
+def _vibration_rms_from_payload(payload: dict[str, Any]) -> float | None:
+    """Acepta `vibration_rms` o alias típicos de DAQ / acelerómetro (m/s² RMS agregado o similar)."""
+    for key in ("vibration_rms", "vib_rms", "accel_rms", "rms_accel"):
+        v = payload.get(key)
+        if v is None or v == "":
+            continue
+        try:
+            return float(v)
+        except (TypeError, ValueError):
+            continue
+    return None
+
+
 def _row_from_message(offset: int, payload: dict[str, Any]) -> tuple[Any, ...]:
     now = datetime.now(timezone.utc)
     device_time = _parse_device_time(payload["device_time"])
@@ -62,6 +93,7 @@ def _row_from_message(offset: int, payload: dict[str, Any]) -> tuple[Any, ...]:
         float(payload["engine_temp"]) if payload.get("engine_temp") is not None else None,
         float(payload["battery_voltage"]) if payload.get("battery_voltage") is not None else None,
         int(payload["rpm"]) if payload.get("rpm") is not None else None,
+        _vibration_rms_from_payload(payload),
         float(payload["tire_pressure_fl"]) if payload.get("tire_pressure_fl") is not None else None,
         float(payload["tire_pressure_fr"]) if payload.get("tire_pressure_fr") is not None else None,
         float(payload["tire_pressure_rl"]) if payload.get("tire_pressure_rl") is not None else None,
@@ -113,6 +145,16 @@ async def main() -> None:
                     try:
                         async with pool.acquire() as conn:
                             await conn.execute(INSERT_SQL, *row)
+                            try:
+                                uuid.UUID(str(data["vehicle_id"]))
+                                audit = build_pipeline_audit_row(data, msg.offset)
+                                await conn.execute(AUDIT_INSERT_SQL, *audit)
+                            except Exception as audit_exc:
+                                logger.warning(
+                                    "telemetría insertada pero audit SCADA omitido offset=%s: %s",
+                                    msg.offset,
+                                    audit_exc,
+                                )
                         logger.debug("offset=%s vehicle=%s", msg.offset, data.get("vehicle_id"))
                     except Exception:
                         logger.exception("fallo INSERT (¿vehicle_id existe en vehicles?) offset=%s", msg.offset)

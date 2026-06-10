@@ -1,6 +1,6 @@
 "use client"
 
-import { useState } from "react"
+import { useEffect, useState } from "react"
 import Link from "next/link"
 import { usePathname } from "next/navigation"
 import type { LucideIcon } from "lucide-react"
@@ -14,15 +14,22 @@ import {
   Workflow,
   FileBarChart,
   Settings,
+  Users,
   ChevronLeft,
   ChevronRight,
   Radio,
   Box,
+  Sigma,
+  ClipboardList,
 } from "lucide-react"
 import { cn } from "@/lib/utils"
 import { Badge } from "@/components/ui/badge"
 import { Avatar, AvatarFallback } from "@/components/ui/avatar"
 import { Button } from "@/components/ui/button"
+import { useQuery } from "@tanstack/react-query"
+import { fetchAnomalies, fetchMe, getApiBaseUrl, type ApiUser } from "@/lib/api"
+import { can, canAccessReportes } from "@/lib/rbac"
+import { useAuthUser } from "@/components/auth/auth-context"
 import {
   Tooltip,
   TooltipContent,
@@ -42,10 +49,13 @@ const NAV: NavItem[] = [
   { href: "/", label: "Resumen", icon: LayoutDashboard },
   { href: "/flota", label: "Flota", icon: Car },
   { href: "/telemetria", label: "Telemetría", icon: Activity, live: true },
+  { href: "/cibernetica", label: "Cibernética", icon: Sigma },
   { href: "/twins", label: "Gemelos digitales", icon: Cpu },
-  { href: "/digital-twin", label: "Twin 3D (inversores)", icon: Box },
+  { href: "/digital-twin", label: "Twin 3D", icon: Box },
   { href: "/optimizacion", label: "Optimización GA", icon: Dna },
-  { href: "/alertas", label: "Alertas", icon: Bell, badge: 3 },
+  { href: "/alertas", label: "Alertas", icon: Bell },
+  { href: "/tickets", label: "Tickets", icon: ClipboardList },
+  { href: "/usuarios", label: "Usuarios", icon: Users },
   { href: "/pipeline", label: "Pipeline SCADA", icon: Workflow },
   { href: "/reportes", label: "Reportes", icon: FileBarChart },
   { href: "/configuracion", label: "Ajustes", icon: Settings },
@@ -59,6 +69,32 @@ type AppSidebarProps = {
 export function AppSidebar({ collapsed = false, onCollapsedChange }: AppSidebarProps) {
   const pathname = usePathname()
   const [isCollapsed, setIsCollapsed] = useState(collapsed)
+  const authUser = useAuthUser()
+  const [me, setMe] = useState<ApiUser | null>(null)
+  const baseUrl = getApiBaseUrl()
+  const role = authUser?.role ?? me?.role ?? null
+
+  useEffect(() => {
+    if (authUser) {
+      setMe(authUser)
+      return
+    }
+    if (!baseUrl) return
+    fetchMe(baseUrl)
+      .then(setMe)
+      .catch(() => setMe(null))
+  }, [baseUrl, authUser])
+
+  const anomaliesQ = useQuery({
+    queryKey: ["sidebar", "open-anomalies"],
+    queryFn: async () => {
+      const rows = await fetchAnomalies(baseUrl!, 100)
+      return rows.filter((a) => !a.resolved_at).length
+    },
+    enabled: !!baseUrl && can(role, "alertas"),
+    refetchInterval: 30_000,
+  })
+  const openAlertCount = anomaliesQ.data ?? 0
 
   const toggleCollapsed = () => {
     const next = !isCollapsed
@@ -86,14 +122,28 @@ export function AppSidebar({ collapsed = false, onCollapsedChange }: AppSidebarP
           {!isCollapsed && (
             <div className="min-w-0">
               <p className="truncate text-sm font-semibold text-sidebar-foreground">Telema Mobility</p>
-              <p className="truncate text-[10px] text-muted-foreground">Auteco Mobility · demo UI</p>
+              <p className="truncate text-[10px] text-muted-foreground">Suzuki Grand Vitara · 13 pruebas</p>
             </div>
           )}
         </div>
 
         <nav className="flex-1 overflow-y-auto px-2 py-4">
           <ul className="space-y-1">
-            {NAV.map((item) => {
+            {NAV.filter((item) => {
+              if (item.href === "/usuarios") return can(role, "usuarios")
+              if (item.href === "/cibernetica") return can(role, "cibernetica")
+              if (item.href === "/alertas") return can(role, "alertas")
+              if (item.href === "/tickets") return can(role, "tickets")
+              if (item.href === "/telemetria") return can(role, "telemetria")
+              if (item.href === "/flota") return can(role, "flota")
+              if (item.href === "/reportes") return canAccessReportes(role)
+              if (item.href === "/pipeline") return can(role, "pipeline")
+              if (item.href === "/twins") return can(role, "twins")
+              if (item.href === "/digital-twin") return can(role, "digital_twin")
+              if (item.href === "/optimizacion") return can(role, "optimizacion")
+              if (item.href === "/configuracion") return can(role, "configuracion")
+              return true
+            }).map((item) => {
               const active =
                 item.href === "/"
                   ? pathname === "/"
@@ -120,12 +170,12 @@ export function AppSidebar({ collapsed = false, onCollapsedChange }: AppSidebarP
                   {!isCollapsed && (
                     <>
                       <span className="flex-1 text-sm font-medium">{item.label}</span>
-                      {item.badge != null ? (
+                      {item.href === "/alertas" && openAlertCount > 0 ? (
                         <Badge
                           variant="destructive"
                           className="flex h-[18px] min-w-[18px] items-center justify-center border-0 bg-[var(--tm-danger)] px-1.5 py-0 text-[10px] text-white"
                         >
-                          {item.badge}
+                          {openAlertCount > 99 ? "99+" : openAlertCount}
                         </Badge>
                       ) : null}
                     </>
@@ -162,8 +212,8 @@ export function AppSidebar({ collapsed = false, onCollapsedChange }: AppSidebarP
                 </Avatar>
               </TooltipTrigger>
               <TooltipContent side="right">
-                <p className="font-medium">Operador de flota</p>
-                <p className="text-xs text-muted-foreground">Sesión local</p>
+                <p className="font-medium">{me?.full_name ?? me?.email ?? "Sin sesión"}</p>
+                <p className="text-xs text-muted-foreground">{me?.role ?? "—"}</p>
               </TooltipContent>
             </Tooltip>
           ) : (
@@ -174,8 +224,10 @@ export function AppSidebar({ collapsed = false, onCollapsedChange }: AppSidebarP
                 </AvatarFallback>
               </Avatar>
               <div className="min-w-0 flex-1">
-                <p className="truncate text-sm font-medium text-sidebar-foreground">Operador de flota</p>
-                <p className="truncate text-xs text-muted-foreground">Sesión local</p>
+                <p className="truncate text-sm font-medium text-sidebar-foreground">
+                  {me?.full_name ?? me?.email ?? "Sin sesión"}
+                </p>
+                <p className="truncate text-xs text-muted-foreground">{me?.role ?? "—"}</p>
               </div>
             </div>
           )}

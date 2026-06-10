@@ -28,3 +28,12 @@ infra/.env
 # OS
 .DS_Store
 Thumbs.db
+
+# Documentación académica local (no subir propuestas sensibles al repo público)
+docs/PROPUESTA_ACADEMICA*.md
+
+# Datos de laboratorio (.mat) — no subir al repo
+data/**/*.mat
+*.mat
+
+# Registro de avances (`docs/REGISTRO_AVANCES.md`): sí se versiona para equipo + seguimiento.

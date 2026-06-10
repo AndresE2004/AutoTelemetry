@@ -1,8 +1,9 @@
 "use client"
 
+import { useEffect, useMemo, useState } from "react"
 import { usePathname } from "next/navigation"
 import { useTheme } from "next-themes"
-import { Search, Bell, Sun, Moon, Command } from "lucide-react"
+import { Search, Bell, Sun, Moon, Command, LogOut, User } from "lucide-react"
 import { Button } from "@/components/ui/button"
 import { Badge } from "@/components/ui/badge"
 import {
@@ -20,15 +21,20 @@ import {
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu"
 import { cn } from "@/lib/utils"
+import { clearStoredRefreshToken } from "@/lib/auth-session"
+import { fetchMe, getApiBaseUrl, logout, type ApiUser } from "@/lib/api"
 
 const ROUTE_LABELS: Record<string, string> = {
   "": "Resumen",
   flota: "Flota",
   telemetria: "Telemetría",
+  cibernetica: "Cibernética",
   twins: "Gemelos digitales",
   "digital-twin": "Twin 3D",
   optimizacion: "Optimización GA",
   alertas: "Alertas",
+  usuarios: "Usuarios",
+  login: "Iniciar sesión",
   pipeline: "Pipeline SCADA",
   reportes: "Reportes",
   configuracion: "Ajustes",
@@ -42,6 +48,16 @@ export function AppHeader({ sidebarCollapsed = false }: AppHeaderProps) {
   const pathname = usePathname()
   const { setTheme } = useTheme()
   const segments = pathname.split("/").filter(Boolean)
+  const baseUrl = useMemo(() => getApiBaseUrl(), [])
+  const [me, setMe] = useState<ApiUser | null>(null)
+
+  useEffect(() => {
+    if (!baseUrl) return
+    // No forzamos nada desde aquí; el AuthGuard se encarga de redirigir.
+    fetchMe(baseUrl)
+      .then(setMe)
+      .catch(() => setMe(null))
+  }, [baseUrl, pathname])
 
   return (
     <header
@@ -127,6 +143,38 @@ export function AppHeader({ sidebarCollapsed = false }: AppHeaderProps) {
               <DropdownMenuItem onClick={() => setTheme("light")}>Claro</DropdownMenuItem>
               <DropdownMenuItem onClick={() => setTheme("dark")}>Oscuro</DropdownMenuItem>
               <DropdownMenuItem onClick={() => setTheme("system")}>Sistema</DropdownMenuItem>
+            </DropdownMenuContent>
+          </DropdownMenu>
+
+          <DropdownMenu>
+            <DropdownMenuTrigger asChild>
+              <Button variant="ghost" size="icon" className="relative h-9 w-9" type="button">
+                <User className="h-4 w-4" />
+              </Button>
+            </DropdownMenuTrigger>
+            <DropdownMenuContent align="end">
+              <DropdownMenuItem disabled>
+                {me ? (
+                  <span className="font-mono text-xs">{me.email}</span>
+                ) : (
+                  <span className="text-xs text-muted-foreground">Sin sesión</span>
+                )}
+              </DropdownMenuItem>
+              <DropdownMenuItem
+                onClick={async () => {
+                  if (!baseUrl) return
+                  try {
+                    await logout(baseUrl)
+                  } finally {
+                    clearStoredRefreshToken()
+                    setMe(null)
+                    window.location.href = "/login?next=/"
+                  }
+                }}
+              >
+                <LogOut className="mr-2 h-4 w-4" />
+                Cerrar sesión
+              </DropdownMenuItem>
             </DropdownMenuContent>
           </DropdownMenu>
 

@@ -14,6 +14,7 @@ class TelemetryPointRead(BaseModel):
     engine_temp: float | None = None
     battery_voltage: float | None = None
     rpm: int | None = None
+    vibration_rms: float | None = None
     latitude: float | None = None
     longitude: float | None = None
     odometer: float | None = None

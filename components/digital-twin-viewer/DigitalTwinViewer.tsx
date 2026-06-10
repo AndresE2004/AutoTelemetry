@@ -1,16 +1,19 @@
 "use client"
 
-import { useCallback, useEffect, useRef, useState } from "react"
-import { DashboardLayout } from "@/components/dashboard-layout"
+import { useCallback, useEffect, useMemo, useState } from "react"
+import { useQuery } from "@tanstack/react-query"
 import { TwinCanvas } from "@/components/digital-twin-viewer/TwinCanvas"
 import { SensorGauges } from "@/components/digital-twin-viewer/SensorGauges"
 import { AnomalyAlert } from "@/components/digital-twin-viewer/AnomalyAlert"
 import { TwinControls } from "@/components/digital-twin-viewer/TwinControls"
 import { EventLog } from "@/components/digital-twin-viewer/EventLog"
+import { Iso10816VibrationPanel } from "@/components/telemetry/iso10816-vibration-panel"
 import { useTwinWebSocket } from "@/hooks/use-twin-websocket"
-import type { TwinScenarioId } from "@/lib/digital-twin-types"
+import { useTwinLabPlayback } from "@/hooks/use-twin-lab-playback"
+import type { TwinDataMode, TwinScenarioId } from "@/lib/digital-twin-types"
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card"
-import { Box } from "lucide-react"
+import { Car } from "lucide-react"
+import { fetchVehicles, getApiBaseUrl } from "@/lib/api"
 import {
   Line,
   LineChart,
@@ -21,112 +24,168 @@ import {
   CartesianGrid,
 } from "recharts"
 
-const DEFAULT_VEHICLE = "TM-DEMO-01"
+const LAB_FLEET_PREFIX = "GV-PRB-"
 
 export function DigitalTwinViewer() {
-  const [vehicleId, setVehicleId] = useState(DEFAULT_VEHICLE)
+  const apiBase = getApiBaseUrl()
+  const [mode, setMode] = useState<TwinDataMode>("lab")
+  const [vehicleId, setVehicleId] = useState<string>("")
   const [scenario, setScenario] = useState<TwinScenarioId>("normal")
-  const { frame, connected, source, events } = useTwinWebSocket({ vehicleId, scenario })
 
-  const [history, setHistory] = useState<{ t: string; temp: number; volt: number; speed: number }[]>([])
-  const tick = useRef(0)
+  const { data: vehicles = [] } = useQuery({
+    queryKey: ["vehicles", apiBase],
+    queryFn: () => fetchVehicles(apiBase!),
+    enabled: Boolean(apiBase),
+  })
+
+  const labVehicles = useMemo(
+    () => vehicles.filter((v) => v.plate.startsWith(LAB_FLEET_PREFIX)),
+    [vehicles],
+  )
 
   useEffect(() => {
-    if (!frame) return
-    tick.current += 1
-    const label = `${tick.current}s`
-    setHistory((h) => {
-      const next = [...h, { t: label, temp: frame.engineTempC, volt: frame.batteryVoltage, speed: frame.speedKmh }]
-      return next.slice(-36)
+    if (vehicleId && vehicles.some((v) => v.id === vehicleId)) return
+    const pick = labVehicles[0] ?? vehicles[0]
+    if (pick) setVehicleId(pick.id)
+  }, [vehicleId, vehicles, labVehicles])
+
+  const selectedVehicle = vehicles.find((v) => v.id === vehicleId)
+  const plate = selectedVehicle?.plate ?? ""
+
+  const lab = useTwinLabPlayback({
+    vehicleId: mode === "lab" ? vehicleId : null,
+    plate,
+    enabled: mode === "lab",
+  })
+
+  const sim = useTwinWebSocket({
+    vehicleId: plate || vehicleId || "TM-DEMO-01",
+    scenario,
+    enabled: mode === "simulation",
+  })
+
+  const active =
+    mode === "lab"
+      ? {
+          frame: lab.frame,
+          events: lab.events,
+          sourceLabel: lab.connected ? `Laboratorio · ${plate}` : "Laboratorio (sin datos)",
+          wsConnected: false,
+          pointCount: lab.pointCount,
+        }
+      : {
+          frame: sim.frame,
+          events: sim.events,
+          sourceLabel: sim.source === "websocket" ? "WebSocket" : "Simulación local",
+          wsConnected: sim.connected,
+          pointCount: undefined,
+        }
+
+  const [history, setHistory] = useState<{ t: string; vib: number }[]>([])
+
+  useEffect(() => {
+    if (!active.frame?.vibrationRms) return
+    const label = new Date(active.frame.deviceTime).toLocaleTimeString("es-CO", {
+      hour: "2-digit",
+      minute: "2-digit",
+      second: "2-digit",
     })
-  }, [frame])
+    setHistory((h) => [...h, { t: label, vib: active.frame!.vibrationRms! }].slice(-48))
+  }, [active.frame])
 
   const onScenarioChange = useCallback((s: TwinScenarioId) => {
     setScenario(s)
   }, [])
 
+  const vibrationSeries = useMemo(
+    () => history.map((h) => h.vib),
+    [history],
+  )
+
   return (
-    <DashboardLayout>
-      <div className="space-y-6">
-        <div>
-          <h1 className="flex flex-wrap items-center gap-2 text-2xl font-semibold">
-            <Box className="h-7 w-7 text-[var(--tm-cyan)]" />
-            Gemelo digital visual
-          </h1>
-          <p className="mt-1 max-w-3xl text-sm text-muted-foreground">
-            Visualización 3D con React Three Fiber. Sin Unity. Los datos pueden venir del simulador Python → Kafka →
-            SCADA o, mientras tanto, del generador sintético en el navegador (~500 ms). Opcional:{" "}
-            <span className="font-mono">NEXT_PUBLIC_TWIN_WS_URL</span> para{" "}
-            <span className="font-mono">/ws/twin/{"{vehicle_id}"}</span>.
+    <div className="space-y-6">
+      <div>
+        <h1 className="flex flex-wrap items-center gap-2 text-2xl font-semibold">
+          <Car className="h-7 w-7 text-[var(--tm-cyan)]" />
+          Gemelo digital · Grand Vitara
+        </h1>
+        <p className="mt-1 max-w-3xl text-sm text-muted-foreground">
+          Visualización 3D del mismo vehículo del laboratorio. En modo <strong>Datos de laboratorio</strong> se
+          reproduce la serie <span className="font-mono">vibration_rms</span> importada y la evaluación ISO 10816-1.
+        </p>
+      </div>
+
+      <TwinControls
+        mode={mode}
+        onModeChange={setMode}
+        vehicles={vehicles}
+        vehicleId={vehicleId}
+        onVehicleIdChange={setVehicleId}
+        scenario={scenario}
+        onScenarioChange={onScenarioChange}
+        sourceLabel={active.sourceLabel}
+        wsConnected={active.wsConnected}
+        pointCount={active.pointCount}
+      />
+
+      <div className="grid grid-cols-1 gap-6 xl:grid-cols-3">
+        <div className="space-y-4 xl:col-span-2">
+          <div className="h-[min(52vh,520px)] w-full overflow-hidden rounded-xl border border-border">
+            <TwinCanvas telemetry={active.frame} />
+          </div>
+          <p className="text-center text-[11px] text-muted-foreground">
+            Modelo SUV procedural · Suzuki Grand Vitara LS 2009 · banco de pruebas acelerómetro
           </p>
         </div>
 
-        <TwinControls
-          vehicleId={vehicleId}
-          onVehicleIdChange={setVehicleId}
-          scenario={scenario}
-          onScenarioChange={onScenarioChange}
-          source={source}
-          wsConnected={connected}
-        />
-
-        <div className="grid grid-cols-1 gap-6 xl:grid-cols-3">
-          <div className="space-y-4 xl:col-span-2">
-            <div className="h-[min(52vh,520px)] w-full overflow-hidden rounded-xl border border-border">
-              <TwinCanvas telemetry={frame} />
-            </div>
-            <p className="text-center text-[11px] text-muted-foreground">
-              Modelo procedural · reemplaza por <span className="font-mono">.glb</span> en{" "}
-              <span className="font-mono">public/models/</span> cuando tengas el activo.
-            </p>
-          </div>
-
-          <div className="space-y-4">
-            <AnomalyAlert frame={frame} />
-            <SensorGauges frame={frame} />
-          </div>
+        <div className="space-y-4">
+          <AnomalyAlert frame={active.frame} />
+          <SensorGauges frame={active.frame} />
+          {mode === "lab" && vibrationSeries.length > 0 ? (
+            <Iso10816VibrationPanel
+              vibrationValues={vibrationSeries}
+              contextLabel={plate ? `Prueba ${plate}` : undefined}
+            />
+          ) : null}
         </div>
+      </div>
 
-        <div className="grid grid-cols-1 gap-6 lg:grid-cols-2">
-          <Card className="border-border bg-card">
-            <CardHeader className="pb-2">
-              <CardTitle className="text-base">Serie reciente (demo)</CardTitle>
-            </CardHeader>
-            <CardContent>
-              <div className="h-[200px] w-full">
+      <div className="grid grid-cols-1 gap-6 lg:grid-cols-2">
+        <Card className="border-border bg-card">
+          <CardHeader className="pb-2">
+            <CardTitle className="text-base">Vibración RMS (reproducción)</CardTitle>
+          </CardHeader>
+          <CardContent>
+            <div className="h-[200px] w-full">
+              {history.length > 0 ? (
                 <ResponsiveContainer width="100%" height="100%">
-                  <LineChart data={history} margin={{ top: 4, right: 8, left: -18, bottom: 0 }}>
+                  <LineChart data={history} margin={{ top: 4, right: 8, left: -12, bottom: 0 }}>
                     <CartesianGrid strokeDasharray="3 3" stroke="rgba(148,163,184,0.2)" />
-                    <XAxis dataKey="t" hide />
-                    <YAxis yAxisId="l" tick={{ fontSize: 10 }} domain={["auto", "auto"]} />
-                    <YAxis yAxisId="r" orientation="right" tick={{ fontSize: 10 }} domain={["auto", "auto"]} />
+                    <XAxis dataKey="t" tick={{ fontSize: 9 }} interval="preserveStartEnd" />
+                    <YAxis tick={{ fontSize: 10 }} width={40} />
                     <Tooltip contentStyle={{ fontSize: 11 }} />
                     <Line
-                      yAxisId="l"
                       type="monotone"
-                      dataKey="temp"
-                      name="°C"
-                      stroke="var(--tm-warning)"
-                      strokeWidth={2}
-                      dot={false}
-                    />
-                    <Line
-                      yAxisId="r"
-                      type="monotone"
-                      dataKey="volt"
-                      name="V"
-                      stroke="var(--tm-info)"
+                      dataKey="vib"
+                      name="RMS (g)"
+                      stroke="#a855f7"
                       strokeWidth={2}
                       dot={false}
                     />
                   </LineChart>
                 </ResponsiveContainer>
-              </div>
-            </CardContent>
-          </Card>
-          <EventLog lines={events} />
-        </div>
+              ) : (
+                <p className="text-sm text-muted-foreground">
+                  {mode === "lab"
+                    ? "Sin ventanas de vibración para este vehículo."
+                    : "Activa modo laboratorio o importa .mat."}
+                </p>
+              )}
+            </div>
+          </CardContent>
+        </Card>
+        <EventLog lines={active.events} />
       </div>
-    </DashboardLayout>
+    </div>
   )
 }

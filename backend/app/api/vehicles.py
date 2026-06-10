@@ -6,11 +6,12 @@ from fastapi import APIRouter, Depends, HTTPException, Query
 from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.api.auth import require_auth
 from app.core.database import get_session
 from app.schemas.telemetry import TelemetryPointRead
 from app.schemas.vehicle import VehicleRead
 
-router = APIRouter(prefix="/vehicles", tags=["vehicles"])
+router = APIRouter(prefix="/vehicles", tags=["vehicles"], dependencies=[Depends(require_auth)])
 
 
 _LIST_SQL = text("""
@@ -58,10 +59,10 @@ _ONE_SQL = text("""
 """)
 
 _TELEMETRY_LAST_SQL = text("""
-    SELECT time, device_time, speed, engine_temp, battery_voltage, rpm,
+    SELECT time, device_time, speed, engine_temp, battery_voltage, rpm, vibration_rms,
            latitude, longitude, odometer
     FROM (
-        SELECT time, device_time, speed, engine_temp, battery_voltage, rpm,
+        SELECT time, device_time, speed, engine_temp, battery_voltage, rpm, vibration_rms,
                latitude, longitude, odometer
         FROM telemetry_readings
         WHERE vehicle_id = :vid

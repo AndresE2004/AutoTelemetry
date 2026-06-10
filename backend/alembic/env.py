@@ -25,11 +25,12 @@ target_metadata = None
 def get_url() -> str:
     # Cliente PostgreSQL en UTF-8. psycopg v3 evita UnicodeDecodeError de psycopg2 en Windows.
     os.environ.setdefault("PGCLIENTENCODING", "UTF8")
-    # Mismo puerto por defecto que seed / Docker paralelo al Postgres local (5432).
-    url = os.environ.get(
-        "DATABASE_URL",
-        "postgresql+psycopg://telema:telema_dev@127.0.0.1:5433/telema",
-    )
+    url = os.environ.get("DATABASE_URL")
+    if not url:
+        raise SystemExit(
+            "DATABASE_URL no está definido. Copia backend/.env.example a backend/.env "
+            "y ajusta host/puerto según infra/docker-compose.yml."
+        )
     if url.startswith("postgresql+psycopg2://"):
         url = url.replace("postgresql+psycopg2://", "postgresql+psycopg://", 1)
     elif url.startswith("postgresql://"):

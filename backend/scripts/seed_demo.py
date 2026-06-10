@@ -20,7 +20,9 @@ from urllib.parse import urlparse
 
 # Raíz backend en sys.path
 _backend_root = Path(__file__).resolve().parent.parent
+_scripts = Path(__file__).resolve().parent
 sys.path.insert(0, str(_backend_root))
+sys.path.insert(0, str(_scripts))
 
 from dotenv import load_dotenv  # noqa: E402
 
@@ -28,22 +30,37 @@ load_dotenv(_backend_root / ".env", encoding="utf-8", override=True)
 
 import psycopg  # noqa: E402
 from psycopg.rows import dict_row  # noqa: E402
+from passlib.context import CryptContext  # noqa: E402
 
-# UUIDs estables (demo)
-DEMO_CLIENT = "00000000-0000-4000-8000-000000000001"
-DEMO_FLEET = "00000000-0000-4000-8000-000000000002"
-DEMO_VEHICLES = [
-    ("00000000-0000-4000-8000-000000000011", "MED-1001", "Auteco", "Urban", 2024),
-    ("00000000-0000-4000-8000-000000000012", "MED-1002", "Auteco", "Cargo", 2023),
-    ("00000000-0000-4000-8000-000000000013", "MED-1003", "Auteco", "Urban", 2024),
+from lab_vehicles import (  # noqa: E402
+    LAB_CLIENT_ID,
+    LAB_CLIENT_NAME,
+    LAB_FLEET_ID,
+    LAB_FLEET_NAME,
+    LAB_VEHICLES,
+)
+
+DEMO_CLIENT = LAB_CLIENT_ID
+DEMO_FLEET = LAB_FLEET_ID
+# (uuid, plate, brand, model, year) — 13 pruebas Suzuki Grand Vitara LS 2009
+DEMO_VEHICLES = [(v[0], v[1], v[2], v[3], v[4]) for v in LAB_VEHICLES]
+
+_pwd = CryptContext(schemes=["pbkdf2_sha256"], deprecated="auto")
+# Cuatro roles demo (RBAC en frontend `lib/rbac.ts`).
+DEMO_USERS: list[dict[str, str]] = [
+    {"email": "admin@telema.example", "full_name": "Admin Demo", "role": "admin", "password": "Admin12345!"},
+    {"email": "viewer@telema.example", "full_name": "Viewer Demo", "role": "viewer", "password": "Viewer12345!"},
+    {"email": "technician@telema.example", "full_name": "Technician Demo", "role": "technician", "password": "Technician12345!"},
+    {"email": "fleet@telema.example", "full_name": "Fleet Manager Demo", "role": "fleet_manager", "password": "FleetMgr12345!"},
 ]
 
 
 def get_dsn() -> str:
-    url = os.environ.get(
-        "DATABASE_URL",
-        "postgresql://telema:telema_dev@127.0.0.1:5433/telema",
-    )
+    url = os.environ.get("DATABASE_URL")
+    if not url:
+        raise SystemExit(
+            "DATABASE_URL no está definido. Copia backend/.env.example a backend/.env."
+        )
     for prefix in ("postgresql+psycopg2://", "postgresql+psycopg://", "postgresql+asyncpg://"):
         if url.startswith(prefix):
             url = "postgresql://" + url[len(prefix) :]
@@ -79,7 +96,53 @@ def main() -> None:
             # Limpieza demo previa (psycopg3: un execute = un solo comando)
             cur.execute(
                 """
+                DELETE FROM telemetry_readings
+                WHERE vehicle_id IN (
+                  SELECT id FROM vehicles WHERE fleet_id = %s::uuid
+                )
+                """,
+                (DEMO_FLEET,),
+            )
+            cur.execute(
+                """
                 DELETE FROM digital_twins WHERE vehicle_id IN (
+                  SELECT id FROM vehicles WHERE fleet_id = %s::uuid
+                )
+                """,
+                (DEMO_FLEET,),
+            )
+            # Dependencias hacia vehicles (orden FK): snapshots → anomalías → tickets → schedules → vehicles
+            cur.execute(
+                """
+                DELETE FROM digital_twin_snapshots
+                WHERE vehicle_id IN (
+                  SELECT id FROM vehicles WHERE fleet_id = %s::uuid
+                )
+                """,
+                (DEMO_FLEET,),
+            )
+            cur.execute(
+                """
+                DELETE FROM anomaly_events
+                WHERE vehicle_id IN (
+                  SELECT id FROM vehicles WHERE fleet_id = %s::uuid
+                )
+                """,
+                (DEMO_FLEET,),
+            )
+            cur.execute(
+                """
+                DELETE FROM maintenance_tickets
+                WHERE vehicle_id IN (
+                  SELECT id FROM vehicles WHERE fleet_id = %s::uuid
+                )
+                """,
+                (DEMO_FLEET,),
+            )
+            cur.execute(
+                """
+                DELETE FROM maintenance_schedules
+                WHERE vehicle_id IN (
                   SELECT id FROM vehicles WHERE fleet_id = %s::uuid
                 )
                 """,
@@ -87,21 +150,39 @@ def main() -> None:
             )
             cur.execute("DELETE FROM vehicles WHERE fleet_id = %s::uuid", (DEMO_FLEET,))
             cur.execute("DELETE FROM fleets WHERE id = %s::uuid", (DEMO_FLEET,))
+            # Borrar usuarios que referencian el cliente demo (FK users.client_id -> clients.id)
+            cur.execute("DELETE FROM users WHERE client_id = %s::uuid", (DEMO_CLIENT,))
+            for u in DEMO_USERS:
+                cur.execute("DELETE FROM users WHERE lower(email) = lower(%s)", (u["email"],))
             cur.execute("DELETE FROM clients WHERE id = %s::uuid", (DEMO_CLIENT,))
 
             cur.execute(
                 """
                 INSERT INTO clients (id, name, nit, contact_email)
-                VALUES (%s::uuid, 'Auteco Mobility (demo)', '900.123.456-1', 'demo@auteco.example')
+                VALUES (%s::uuid, %s, '900.123.456-1', 'lab@telema.example')
                 """,
-                (DEMO_CLIENT,),
+                (DEMO_CLIENT, LAB_CLIENT_NAME),
             )
+            for u in DEMO_USERS:
+                cur.execute(
+                    """
+                    INSERT INTO users (email, full_name, role, client_id, hashed_password, is_active)
+                    VALUES (%s, %s, %s, %s::uuid, %s, TRUE)
+                    """,
+                    (
+                        u["email"],
+                        u["full_name"],
+                        u["role"],
+                        DEMO_CLIENT,
+                        _pwd.hash(u["password"]),
+                    ),
+                )
             cur.execute(
                 """
                 INSERT INTO fleets (id, name, client_id)
-                VALUES (%s::uuid, 'Flota Medellín — demo vertical', %s::uuid)
+                VALUES (%s::uuid, %s, %s::uuid)
                 """,
-                (DEMO_FLEET, DEMO_CLIENT),
+                (DEMO_FLEET, LAB_FLEET_NAME, DEMO_CLIENT),
             )
 
             now = datetime.now(timezone.utc)
@@ -128,11 +209,13 @@ def main() -> None:
                     ),
                 )
 
-            health_rows = [
-                ("00000000-0000-4000-8000-000000000011", 0.92, 0.88, 0.90, 0.91, 0.903, 0.12, 0.08),
-                ("00000000-0000-4000-8000-000000000012", 0.78, 0.72, 0.75, 0.74, 0.748, 0.22, 0.18),
-                ("00000000-0000-4000-8000-000000000013", 0.88, 0.85, 0.87, 0.86, 0.865, 0.09, 0.05),
-            ]
+            # Salud inicial distinta por prueba (se actualiza con telemetría/anomalías reales)
+            health_rows = []
+            for i, (vid, *_rest) in enumerate(DEMO_VEHICLES):
+                base = 0.82 + (i % 5) * 0.03
+                health_rows.append(
+                    (vid, base, base - 0.02, base - 0.01, base, base, 0.05 + (i % 3) * 0.04, 0.08),
+                )
             for vid, eng, bat, tire, trans, overall, div, failp in health_rows:
                 cur.execute(
                     """
@@ -150,8 +233,14 @@ def main() -> None:
 
         conn.commit()
         print("Seed demo OK. Flota:", DEMO_FLEET)
+        print("Usuarios demo (email / password / rol):")
+        for u in DEMO_USERS:
+            print(f"  - {u['email']} / {u['password']} / {u['role']}")
         print("GET http://localhost:8000/vehicles")
         print("GET http://localhost:8000/fleets/%s/health" % DEMO_FLEET)
+        print("Vehículos Suzuki Grand Vitara (importar .mat con scripts/import_all_matlab_tests.py):")
+        for i, (vid, plate, brand, model, year) in enumerate(DEMO_VEHICLES):
+            print(f"  Prueba {i + 1:02d}: {plate}  {brand} {model} {year}  id={vid}")
 
         with conn.cursor(row_factory=dict_row) as cur:
             cur.execute("SELECT COUNT(*) AS n FROM vehicles WHERE fleet_id = %s::uuid", (DEMO_FLEET,))

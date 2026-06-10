@@ -1,0 +1,11 @@
+# Prometheus — scrape de la API FastAPI en el host (uvicorn :8000).
+# Requiere `host.docker.internal` (Docker Desktop Windows/Mac; Linux con extra_hosts en compose).
+
+global:
+  scrape_interval: 15s
+
+scrape_configs:
+  - job_name: telema-api
+    metrics_path: /metrics
+    static_configs:
+      - targets: ["host.docker.internal:8000"]

@@ -1,6 +1,7 @@
 "use client"
 
-import { useCallback, useEffect, useState } from "react"
+import { useMemo, useState } from "react"
+import { useQuery } from "@tanstack/react-query"
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card"
 import {
   Select,
@@ -19,59 +20,49 @@ import {
   XAxis,
   YAxis,
 } from "recharts"
-import { Waves } from "lucide-react"
+import { Waves, Loader2 } from "lucide-react"
+import { fetchVehicleTelemetry, fetchVehicles, getApiBaseUrl } from "@/lib/api"
 
-const UNITS = [
-  { id: "TM-4821", label: "TM-4821 · furgón eléctrico" },
-  { id: "TM-3301", label: "TM-3301 · urbano" },
-  { id: "TM-1105", label: "TM-1105 · carga mediana" },
-  { id: "TM-2204", label: "TM-2204 · máximo" },
-  { id: "TM-5512", label: "TM-5512 · urbano" },
-] as const
-
-type Row = { t: string; rpm: number; temp: number }
-
-function seed(): Row[] {
-  const out: Row[] = []
-  for (let i = 30; i >= 0; i--) {
-    out.push({
-      t: `${i}s`,
-      rpm: 1950 + Math.random() * 700,
-      temp: 74 + Math.random() * 10,
-    })
-  }
-  return out
-}
+type Row = { t: string; vibration: number }
 
 export function LiveTelemetryChart() {
-  const [vehicle, setVehicle] = useState<string>(UNITS[0].id)
-  const [rows, setRows] = useState<Row[]>([])
-  const [ready, setReady] = useState(false)
+  const baseUrl = getApiBaseUrl()
+  const [vehicleId, setVehicleId] = useState<string>("")
 
-  useEffect(() => {
-    setRows(seed())
-    setReady(true)
-  }, [])
+  const vehiclesQ = useQuery({
+    queryKey: ["dashboard", "telemetry-vehicles"],
+    queryFn: () => fetchVehicles(baseUrl!),
+    enabled: !!baseUrl,
+  })
 
-  const tick = useCallback(() => {
-    setRows((prev) => {
-      if (prev.length === 0) return seed()
-      const next = prev.slice(1)
-      const last = prev[prev.length - 1]!
-      next.push({
-        t: "0s",
-        rpm: Math.max(1750, Math.min(2850, last.rpm + (Math.random() - 0.5) * 180)),
-        temp: Math.max(68, Math.min(96, last.temp + (Math.random() - 0.5) * 3)),
-      })
-      return next.map((r, i) => ({ ...r, t: `${30 - i}s` }))
-    })
-  }, [])
+  const vehicles = vehiclesQ.data ?? []
+  const activeId = vehicleId || vehicles[0]?.id || ""
 
-  useEffect(() => {
-    if (!ready) return
-    const id = window.setInterval(tick, 1600)
-    return () => window.clearInterval(id)
-  }, [ready, tick])
+  const telemetryQ = useQuery({
+    queryKey: ["dashboard", "telemetry", activeId],
+    queryFn: () => fetchVehicleTelemetry(baseUrl!, activeId, 60),
+    enabled: !!baseUrl && !!activeId,
+    refetchInterval: 8_000,
+  })
+
+  const rows: Row[] = useMemo(() => {
+    const pts = telemetryQ.data
+    if (!pts?.length) return []
+    return pts.map((p) => ({
+      t: new Date(p.time).toLocaleTimeString("es-CO", { hour: "2-digit", minute: "2-digit", second: "2-digit" }),
+      vibration: p.vibration_rms ?? 0,
+    }))
+  }, [telemetryQ.data])
+
+  const labelById = useMemo(() => {
+    const m = new Map<string, string>()
+    for (const v of vehicles) {
+      m.set(v.id, `${v.plate} · ${v.model ?? v.brand ?? "vehículo"}`)
+    }
+    return m
+  }, [vehicles])
+
+  const hasApi = !!baseUrl && vehicles.length > 0
 
   return (
     <Card className="border-border bg-card">
@@ -79,27 +70,45 @@ export function LiveTelemetryChart() {
         <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
           <CardTitle className="flex items-center gap-2 text-base font-semibold">
             <Waves className="h-4 w-4 text-[var(--tm-info)]" />
-            Serie en vivo (demo)
-            <span className="h-2 w-2 rounded-full bg-[var(--tm-success)] pulse-dot" />
+            Telemetría reciente
+            {hasApi ? (
+              <span className="h-2 w-2 rounded-full bg-[var(--tm-success)] pulse-dot" />
+            ) : null}
+            {telemetryQ.isFetching ? (
+              <Loader2 className="h-3.5 w-3.5 animate-spin text-muted-foreground" />
+            ) : null}
           </CardTitle>
-          <Select value={vehicle} onValueChange={setVehicle}>
-            <SelectTrigger className="h-8 w-full text-xs sm:w-[220px]">
-              <SelectValue />
-            </SelectTrigger>
-            <SelectContent>
-              {UNITS.map((u) => (
-                <SelectItem key={u.id} value={u.id} className="text-xs">
-                  {u.label}
-                </SelectItem>
-              ))}
-            </SelectContent>
-          </Select>
+          {hasApi ? (
+            <Select value={activeId} onValueChange={setVehicleId}>
+              <SelectTrigger className="h-8 w-full text-xs sm:w-[240px]">
+                <SelectValue placeholder="Vehículo" />
+              </SelectTrigger>
+              <SelectContent>
+                {vehicles.map((v) => (
+                  <SelectItem key={v.id} value={v.id} className="text-xs">
+                    {labelById.get(v.id) ?? v.plate}
+                  </SelectItem>
+                ))}
+              </SelectContent>
+            </Select>
+          ) : null}
         </div>
       </CardHeader>
       <CardContent>
-        {!ready ? (
+        {!hasApi ? (
+          <div className="flex h-[280px] flex-col items-center justify-center gap-2 text-center text-sm text-muted-foreground">
+            <p>Configura `NEXT_PUBLIC_API_URL` y ejecuta seed + simulador/Kafka para ver series reales.</p>
+            <p>
+              También puedes abrir{" "}
+              <a href="/telemetria" className="text-[var(--tm-info)] underline">
+                /telemetria
+              </a>
+              .
+            </p>
+          </div>
+        ) : rows.length === 0 ? (
           <div className="flex h-[280px] items-center justify-center text-sm text-muted-foreground">
-            Inicializando buffer…
+            Sin lecturas aún para esta unidad.
           </div>
         ) : (
           <div className="h-[280px] w-full">
@@ -112,20 +121,7 @@ export function LiveTelemetryChart() {
                   tick={{ fill: "#94a3b8", fontSize: 10 }}
                   axisLine={{ stroke: "rgba(148,163,184,0.25)" }}
                 />
-                <YAxis
-                  yAxisId="rpm"
-                  stroke="#94a3b8"
-                  tick={{ fill: "#94a3b8", fontSize: 10 }}
-                  domain={[1500, 3000]}
-                />
-                <YAxis
-                  yAxisId="temp"
-                  orientation="right"
-                  stroke="#94a3b8"
-                  tick={{ fill: "#94a3b8", fontSize: 10 }}
-                  domain={[60, 100]}
-                  tickFormatter={(v) => `${v}°`}
-                />
+                <YAxis yAxisId="vib" stroke="#94a3b8" tick={{ fill: "#94a3b8", fontSize: 10 }} />
                 <Tooltip
                   contentStyle={{
                     backgroundColor: "var(--card)",
@@ -136,20 +132,11 @@ export function LiveTelemetryChart() {
                 />
                 <Legend wrapperStyle={{ fontSize: 12 }} />
                 <Line
-                  yAxisId="rpm"
+                  yAxisId="vib"
                   type="monotone"
-                  dataKey="rpm"
-                  name="RPM"
-                  stroke="var(--tm-info)"
-                  strokeWidth={2}
-                  dot={false}
-                />
-                <Line
-                  yAxisId="temp"
-                  type="monotone"
-                  dataKey="temp"
-                  name="Temp. motor (°C)"
-                  stroke="var(--tm-warning)"
+                  dataKey="vibration"
+                  name="Vibración RMS (g)"
+                  stroke="#a855f7"
                   strokeWidth={2}
                   dot={false}
                 />

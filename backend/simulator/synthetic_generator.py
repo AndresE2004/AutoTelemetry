@@ -7,6 +7,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import math
 import os
 import uuid
 from datetime import datetime, timezone
@@ -45,6 +46,10 @@ def _payload(
 
     s = physics.state
     now = datetime.now(timezone.utc)
+
+    vib = 0.35 + 1.85 * abs(math.sin(tick / 11.0)) + (s.speed_kmh / 220.0) * 0.5
+    if scenario != ScenarioId.NORMAL:
+        vib += 0.4 + (tick % 13) * 0.03
     return {
         "device_time": now.isoformat(),
         "vehicle_id": vehicle_uuid,
@@ -52,6 +57,7 @@ def _payload(
         "engine_temp": round(s.engine_temp_c, 2),
         "battery_voltage": round(s.battery_voltage, 3),
         "rpm": int(s.rpm),
+        "vibration_rms": round(vib, 4),
         "tire_pressure_fl": round(s.tire_psi[0], 2),
         "tire_pressure_fr": round(s.tire_psi[1], 2),
         "tire_pressure_rl": round(s.tire_psi[2], 2),
@@ -79,6 +85,11 @@ async def run_simulation_loop(
         servers = kafka_bootstrap or os.environ["KAFKA_BOOTSTRAP_SERVERS"]
         publisher = TelemetryPublisher(servers)
         await publisher.start()
+        logger.info("Simulador publicando a Kafka · vehicles=%s · interval_s=%s", len(vehicle_ids), interval_s)
+    else:
+        logger.warning(
+            "Simulador en modo SOLO-LOG. Define KAFKA_BOOTSTRAP_SERVERS=127.0.0.1:9092 para publicar a Kafka."
+        )
 
     tick = 0
     try:
@@ -87,6 +98,15 @@ async def run_simulation_loop(
                 body = _payload(vid, physics_map[vid], scenario, tick)
                 if publisher:
                     await publisher.publish(vid, body)
+                    if tick % 20 == 0:
+                        logger.info(
+                            "Publicado tick=%s vehicle=%s speed=%s rpm=%s temp=%s",
+                            tick,
+                            vid,
+                            body.get("speed"),
+                            body.get("rpm"),
+                            body.get("engine_temp"),
+                        )
                 else:
                     logger.debug("tick=%s %s", tick, body)
             tick += 1
@@ -97,6 +117,13 @@ async def run_simulation_loop(
 
 
 if __name__ == "__main__":
+    from pathlib import Path
+
+    from dotenv import load_dotenv
+
+    _backend = Path(__file__).resolve().parent.parent
+    load_dotenv(_backend / ".env", encoding="utf-8", override=False)
+
     logging.basicConfig(level=logging.INFO)
     vids = os.environ.get("SIM_VEHICLE_IDS", str(uuid.uuid4())).split(",")
     scen = ScenarioId(os.environ.get("SIM_SCENARIO", "normal"))

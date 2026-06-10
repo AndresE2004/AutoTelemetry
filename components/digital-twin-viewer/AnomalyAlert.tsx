@@ -37,7 +37,15 @@ export function AnomalyAlert({ frame }: { frame: TwinTelemetryFrame | null }) {
           {frame.pipelineNote ? ` · ${frame.pipelineNote}` : null}
         </p>
         <p className="mt-1 text-xs text-muted-foreground">
-          Escenario simulado: <span className="font-medium text-foreground">{frame.scenario}</span>
+          {frame.scenario === "lab_playback" ? (
+            <>
+              Fuente: <span className="font-medium text-foreground">laboratorio · ISO 10816</span>
+            </>
+          ) : (
+            <>
+              Escenario: <span className="font-medium text-foreground">{frame.scenario}</span>
+            </>
+          )}
         </p>
       </div>
     </div>

@@ -1,6 +1,7 @@
 "use client"
 
 import type { TwinTelemetryFrame } from "@/lib/digital-twin-types"
+import { evaluateIso10816FromAccelRms, iso10816ZoneColor } from "@/lib/iso10816"
 
 function Gauge({
   label,
@@ -52,8 +53,32 @@ export function SensorGauges({ frame }: { frame: TwinTelemetryFrame | null }) {
     )
   }
 
+  const vib = frame.vibrationRms ?? 0
+  const iso = vib > 0 ? evaluateIso10816FromAccelRms(vib, { unit: "g", nominalHz: 50 }) : null
+
   return (
     <div className="grid gap-3 sm:grid-cols-2">
+      {vib > 0 ? (
+        <div
+          className="rounded-lg border p-3 sm:col-span-2"
+          style={{
+            borderColor: iso ? `${iso10816ZoneColor(iso.zone)}66` : undefined,
+            background: iso ? `${iso10816ZoneColor(iso.zone)}14` : undefined,
+          }}
+        >
+          <p className="text-[10px] font-medium uppercase tracking-wide text-muted-foreground">
+            Vibración RMS · ISO 10816
+          </p>
+          <p className="mt-1 font-mono text-lg">
+            {vib.toFixed(4)} <span className="text-xs text-muted-foreground">g</span>
+            {iso ? (
+              <span className="ml-2 text-sm" style={{ color: iso10816ZoneColor(iso.zone) }}>
+                → {iso.velocityMmS.toFixed(2)} mm/s · Zona {iso.zone}
+              </span>
+            ) : null}
+          </p>
+        </div>
+      ) : null}
       <Gauge label="Velocidad" value={frame.speedKmh} unit="km/h" min={0} max={100} decimals={1} />
       <Gauge
         label="Temp. motor"

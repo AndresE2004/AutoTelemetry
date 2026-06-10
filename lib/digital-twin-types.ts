@@ -1,16 +1,20 @@
 export type TwinScenarioId = "normal" | "overheating" | "battery_failure"
+export type TwinDataMode = "lab" | "simulation"
 
 export type TwinTelemetryFrame = {
   vehicleId: string
+  /** Placa visible (p. ej. GV-PRB-05) */
+  plate?: string
   deviceTime: string
   speedKmh: number
   engineTempC: number
   batteryVoltage: number
   rpm: number
+  vibrationRms?: number
   tirePsi: { fl: number; fr: number; rl: number; rr: number }
   anomalyScore: number
   anomalyActive: boolean
-  scenario: TwinScenarioId
+  scenario: TwinScenarioId | "lab_playback"
   pipelineNote?: string
 }
 

@@ -18,7 +18,7 @@ export default function TwinsIndexPage() {
             Gemelos digitales
           </h1>
           <p className="mt-1 text-sm text-muted-foreground">
-            Selecciona una unidad para ver el estado simulado frente a las lecturas reales (datos de demostración).
+            Selecciona una unidad para ver su estado y lecturas asociadas.
           </p>
         </div>
 

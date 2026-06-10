@@ -6,10 +6,11 @@ from fastapi import APIRouter, Depends, HTTPException
 from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.api.auth import require_auth
 from app.core.database import get_session
 from app.schemas.vehicle import FleetHealthRow
 
-router = APIRouter(prefix="/fleets", tags=["fleets"])
+router = APIRouter(prefix="/fleets", tags=["fleets"], dependencies=[Depends(require_auth)])
 
 _EXISTS_FLEET = text("SELECT 1 FROM fleets WHERE id = :fid LIMIT 1")
 
